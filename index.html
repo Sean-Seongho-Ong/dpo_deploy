@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>문서 평가 시스템</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            padding: 20px;
+            background-color: #f8f9fa;
+        }
+        .evaluation-item {
+            background-color: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            transition: all 0.3s ease;
+        }
+        .evaluation-item.completed {
+            background-color: #e9ecef;
+            position: relative;
+        }
+        .evaluation-item.completed::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0,0,0,0.1);
+            pointer-events: none;
+        }
+        .rating-buttons {
+            display: flex;
+            gap: 10px;
+            margin: 15px 0;
+        }
+        .rating-btn {
+            padding: 8px 16px;
+            border: 1px solid #dee2e6;
+            background-color: white;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .rating-btn:hover {
+            background-color: #f8f9fa;
+        }
+        .rating-btn.active {
+            background-color: #0d6efd;
+            color: white;
+            border-color: #0d6efd;
+        }
+        .rating-btn:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+        .status-badge {
+            margin-left: 10px;
+        }
+        .edit-form {
+            display: none;
+            margin-top: 20px;
+            padding: 20px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+        }
+        .edit-form.show {
+            display: block;
+        }
+        .edit-btn {
+            margin-top: 10px;
+        }
+        @media (max-width: 768px) {
+            .container {
+                padding: 0.5rem;
+            }
+            .evaluation-item {
+                margin-bottom: 1rem;
+                padding: 0.8rem;
+            }
+            h3 {
+                font-size: 1.2rem;
+            }
+            h4 {
+                font-size: 1.1rem;
+            }
+            p {
+                font-size: 1rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="mb-4">문서 평가 시스템</h1>
+        
+        <div id="login-form" class="mb-4">
+            <h2>로그인</h2>
+            <div class="mb-3">
+                <label class="form-label">사용자 이름</label>
+                <input type="text" class="form-control" id="username">
+            </div>
+            <div class="mb-3">
+                <label class="form-label">비밀번호</label>
+                <input type="password" class="form-control" id="password">
+            </div>
+            <button class="btn btn-primary" onclick="login()">로그인</button>
+        </div>
+
+        <div id="evaluation-container" style="display: none;">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2>평가 항목</h2>
+                <div>
+                    <span id="user-info" class="badge bg-primary"></span>
+                    <button class="btn btn-secondary ms-2" onclick="logout()">로그아웃</button>
+                </div>
+            </div>
+            <div id="evaluation-items"></div>
+        </div>
+    </div>
+
+    <script>
+        let currentUser = null;
+        let evaluationData = [];
+        const completedItems = new Set();
+
+        async function login() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            
+            if (!username || !password) {
+                alert('사용자 이름과 비밀번호를 입력해주세요.');
+                return;
+            }
+            
+            try {
+                const response = await fetch('http://192.168.219.128:5000/api/connect', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+                
+                if (response.ok) {
+                    currentUser = username;
+                    document.getElementById('login-form').style.display = 'none';
+                    document.getElementById('evaluation-container').style.display = 'block';
+                    document.getElementById('user-info').textContent = `사용자: ${username}`;
+                    await loadData();
+                } else {
+                    const data = await response.json();
+                    alert(data.error || '로그인에 실패했습니다.');
+                }
+            } catch (error) {
+                console.error('Login error:', error);
+                alert('서버 연결에 실패했습니다.');
+            }
+        }
+
+        async function logout() {
+            try {
+                await fetch('http://192.168.219.128:5000/api/disconnect', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ username: currentUser })
+                });
+            } catch (error) {
+                console.error('Logout error:', error);
+            }
+            
+            currentUser = null;
+            document.getElementById('login-form').style.display = 'block';
+            document.getElementById('evaluation-container').style.display = 'none';
+            document.getElementById('username').value = '';
+            document.getElementById('password').value = '';
+        }
+
+        async function loadData() {
+            try {
+                const response = await fetch('http://192.168.219.128:5000/api/data');
+                if (response.ok) {
+                    evaluationData = await response.json();
+                    renderItems();
+                } else {
+                    throw new Error('데이터 로드 실패');
+                }
+            } catch (error) {
+                console.error('Error loading data:', error);
+                alert('데이터를 로드하는 중 오류가 발생했습니다.');
+            }
+        }
+
+        function renderItems() {
+            const container = document.getElementById('evaluation-items');
+            container.innerHTML = '';
+
+            evaluationData.forEach((item, index) => {
+                const itemId = item.id || `item_${index}`;
+                const isCompleted = item.metadata?.evaluation?.completed || false;
+                const currentScore = item.metadata?.evaluation?.score || null;
+                const div = document.createElement('div');
+                div.className = `evaluation-item ${isCompleted ? 'completed' : ''}`;
+                div.dataset.id = item.id;
+                div.innerHTML = `
+                    <h3>문서 ID: ${itemId} 
+                        ${isCompleted ? 
+                            `<span class="badge bg-secondary status-badge">완료됨</span>
+                             <button class="btn btn-warning btn-sm ms-2" onclick="resetEvaluation('${itemId}')">재평가</button>` 
+                            : ''}
+                    </h3>
+                    <div class="mb-3">
+                        <h4>Instruction</h4>
+                        <p>${item.instruction || ''}</p>
+                    </div>
+                    <div class="mb-3">
+                        <h4>Input</h4>
+                        <p>${item.input || ''}</p>
+                    </div>
+                    <div class="mb-3">
+                        <h4>Output</h4>
+                        <p>${item.output || ''}</p>
+                    </div>
+                    <div class="rating-buttons">
+                        ${[1, 2, 3, 4, 5].map(score => `
+                            <button class="rating-btn ${currentScore === score ? 'active' : ''}" 
+                                    onclick="rateItem(this, ${score})" 
+                                    ${isCompleted ? 'disabled' : ''}>${score}</button>
+                        `).join('')}
+                    </div>
+                    ${isCompleted ? `<div class="mt-2"><strong>평가 점수: ${currentScore}</strong></div>` : ''}
+                    <button class="btn btn-secondary edit-btn" onclick="toggleEditForm('${itemId}')" ${isCompleted ? 'disabled' : ''}>수정</button>
+                    <div id="edit-form-${itemId}" class="edit-form">
+                        <div class="mb-3">
+                            <label>Instruction</label>
+                            <textarea class="form-control" id="edit-instruction-${itemId}">${item.instruction || ''}</textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label>Input</label>
+                            <textarea class="form-control" id="edit-input-${itemId}">${item.input || ''}</textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label>Output</label>
+                            <textarea class="form-control" id="edit-output-${itemId}">${item.output || ''}</textarea>
+                        </div>
+                        <button class="btn btn-primary" onclick="submitEdit('${itemId}')">저장</button>
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        function rateItem(button, score) {
+            const itemId = button.closest('.evaluation-item').dataset.id;
+            const item = evaluationData.find(item => item.id === itemId);
+            
+            if (item?.metadata?.evaluation?.completed) {
+                alert('이미 평가가 완료된 항목입니다. 재평가 버튼을 사용해주세요.');
+                return;
+            }
+            
+            console.log('Rating item:', itemId, 'with score:', score);
+            
+            // 즉시 UI 업데이트
+            if (item) {
+                if (!item.metadata) item.metadata = {};
+                item.metadata.evaluation = {
+                    score: score,
+                    username: currentUser,
+                    completed: true,
+                    timestamp: new Date().toISOString()
+                };
+                renderItems();
+            }
+            
+            // 평가 데이터 전송
+            fetch('http://192.168.219.128:5000/api/evaluate', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    id: itemId,
+                    evaluation: score,
+                    username: currentUser
+                })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    // 실패 시 UI 롤백
+                    if (item) {
+                        item.metadata.evaluation.completed = false;
+                        renderItems();
+                    }
+                    return response.json().then(data => {
+                        throw new Error(data.error || '평가 저장에 실패했습니다');
+                    });
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log('평가 저장 성공:', data);
+                // 성공 시 데이터 다시 로드하여 최신 상태 반영
+                loadData().then(() => {
+                    alert('평가가 저장되었습니다.');
+                });
+            })
+            .catch(error => {
+                console.error('평가 저장 실패:', error);
+                alert(error.message);
+            });
+        }
+
+        function toggleEditForm(itemId) {
+            const form = document.getElementById(`edit-form-${itemId}`);
+            form.classList.toggle('show');
+        }
+
+        async function submitEdit(itemId) {
+            const instruction = document.getElementById(`edit-instruction-${itemId}`).value;
+            const input = document.getElementById(`edit-input-${itemId}`).value;
+            const output = document.getElementById(`edit-output-${itemId}`).value;
+            
+            try {
+                const response = await fetch('http://192.168.219.128:5000/api/modify', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        id: itemId,
+                        instruction,
+                        input,
+                        output,
+                        username: currentUser
+                    })
+                });
+                
+                if (response.ok) {
+                    alert('수정이 저장되었습니다.');
+                    toggleEditForm(itemId);
+                    await loadData();
+                } else {
+                    const data = await response.json();
+                    alert(data.error || '수정 저장에 실패했습니다.');
+                }
+            } catch (error) {
+                console.error('Error submitting edit:', error);
+                alert('서버 연결에 실패했습니다.');
+            }
+        }
+
+        async function resetEvaluation(itemId) {
+            if (!confirm('정말로 이 항목을 재평가하시겠습니까?')) {
+                return;
+            }
+
+            try {
+                const response = await fetch('http://192.168.219.128:5000/api/reset-evaluation', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        id: itemId,
+                        username: currentUser
+                    })
+                });
+
+                if (response.ok) {
+                    // 데이터 다시 로드
+                    await loadData();
+                    alert('재평가가 가능한 상태로 변경되었습니다.');
+                } else {
+                    const data = await response.json();
+                    throw new Error(data.error || '재평가 상태 변경에 실패했습니다');
+                }
+            } catch (error) {
+                console.error('재평가 상태 변경 실패:', error);
+                alert(error.message);
+            }
+        }
+    </script>
+</body>
+</html> 
