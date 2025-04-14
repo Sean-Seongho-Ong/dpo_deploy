@@ -81,21 +81,31 @@ def save_optimization_data(data):
 
 @app.route('/api/connect', methods=['POST'])
 def connect():
-    username = request.json.get('username')
-    password = request.json.get('password')
-    
-    if not username or not password:
-        return jsonify({'error': 'Username and password are required'}), 400
-    
-    if not verify_credentials(username, password):
-        return jsonify({'error': 'Invalid credentials'}), 401
-    
-    with active_users_lock:
-        if len(active_users) >= MAX_USERS:
-            return jsonify({'error': 'Maximum number of users reached'}), 403
-        active_users.add(username)
-    
-    return jsonify({'message': 'Connected successfully'})
+    try:
+        username = request.json.get('username')
+        password = request.json.get('password')
+        
+        print(f"Login attempt for user: {username}")  # 로깅 추가
+        
+        if not username or not password:
+            print("Missing credentials")
+            return jsonify({'error': 'Username and password are required'}), 400
+        
+        if not verify_credentials(username, password):
+            print("Invalid credentials")
+            return jsonify({'error': 'Invalid credentials'}), 401
+        
+        with active_users_lock:
+            if len(active_users) >= MAX_USERS:
+                print("Max users reached")
+                return jsonify({'error': 'Maximum number of users reached'}), 403
+            active_users.add(username)
+        
+        print(f"User {username} connected successfully")
+        return jsonify({'message': 'Connected successfully'})
+    except Exception as e:
+        print(f"Error in connect: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/disconnect', methods=['POST'])
 def disconnect():
