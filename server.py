@@ -10,6 +10,9 @@ import os
 from threading import Lock
 import uvicorn
 
+# 기본 디렉토리 설정
+BASE_DIR = '/home/ubuntu/Stage1_DPO'  # 서버 기본 디렉토리 경로
+
 app = FastAPI(title="문서 평가 시스템 API")
 
 # CORS 설정
@@ -22,7 +25,7 @@ app.add_middleware(
 )
 
 # 정적 파일 제공
-app.mount("/static", StaticFiles(directory="."), name="static")
+app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
 
 # 동시 접속자 수 제한을 위한 락
 active_users_lock = Lock()
@@ -30,9 +33,9 @@ active_users = set()
 MAX_USERS = 4
 
 # 파일 경로를 절대 경로로 설정
-VALIDATION_FILE = os.path.join(os.path.dirname(__file__), 'qlora_finetune_dataset_valid.json')
-OPTIMIZATION_FILE = os.path.join(os.path.dirname(__file__), 'direct_preference_optimization.json')
-ACCOUNT_FILE = os.path.join(os.path.dirname(__file__), 'account.json')
+VALIDATION_FILE = os.path.join(BASE_DIR, 'qlora_finetune_dataset_valid.json')
+OPTIMIZATION_FILE = os.path.join(BASE_DIR, 'direct_preference_optimization.json')
+ACCOUNT_FILE = os.path.join(BASE_DIR, 'account.json')
 
 # 서버 설정
 SERVER_IP = '134.185.98.95'
@@ -76,11 +79,14 @@ def verify_credentials(username: str, password: str) -> bool:
 
 def load_validation_data():
     try:
+        print(f"Current working directory: {os.getcwd()}")
         print(f"Attempting to load validation data from: {VALIDATION_FILE}")
         print(f"File exists: {os.path.exists(VALIDATION_FILE)}")
+        print(f"File size: {os.path.getsize(VALIDATION_FILE) if os.path.exists(VALIDATION_FILE) else 'File not found'}")
         
         if not os.path.exists(VALIDATION_FILE):
             print(f"Creating empty validation data file")
+            os.makedirs(os.path.dirname(VALIDATION_FILE), exist_ok=True)
             with open(VALIDATION_FILE, 'w', encoding='utf-8') as f:
                 json.dump([], f, ensure_ascii=False, indent=2)
             return []
@@ -98,7 +104,10 @@ def load_validation_data():
             try:
                 data = json.loads(file_content)
                 print(f"Successfully loaded data, type: {type(data)}")
+                print(f"Data length: {len(data)}")
                 print(f"First item type: {type(data[0]) if data else 'empty'}")
+                if data and len(data) > 0:
+                    print(f"First item keys: {list(data[0].keys())}")
                 return data
             except json.JSONDecodeError as json_err:
                 print(f"JSON decode error: {str(json_err)}")
@@ -141,13 +150,17 @@ def save_optimization_data(data):
 # 라우트 정의
 @app.get("/")
 async def serve_index():
-    return FileResponse("index.html")
+    index_file = os.path.join(BASE_DIR, "index.html")
+    if os.path.exists(index_file):
+        return FileResponse(index_file)
+    raise HTTPException(status_code=404, detail="Index file not found")
 
 @app.get("/{path:path}")
 async def serve_static(path: str):
-    if os.path.isfile(path):
-        return FileResponse(path)
-    raise HTTPException(status_code=404, detail="File not found")
+    file_path = os.path.join(BASE_DIR, path)
+    if os.path.isfile(file_path):
+        return FileResponse(file_path)
+    raise HTTPException(status_code=404, detail=f"File {path} not found")
 
 @app.post("/api/connect")
 async def connect(request: LoginRequest):
@@ -345,4 +358,7 @@ async def reset_evaluation(request: ResetEvaluationRequest):
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
 
 if __name__ == '__main__':
+    print(f"Starting server at http://{SERVER_IP}:{SERVER_PORT}")
+    print(f"Documentation available at http://{SERVER_IP}:{SERVER_PORT}/docs")
+    print(f"Base directory: {BASE_DIR}")
     uvicorn.run("server:app", host="0.0.0.0", port=SERVER_PORT, reload=False) 
