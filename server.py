@@ -76,14 +76,39 @@ def verify_credentials(username: str, password: str) -> bool:
 
 def load_validation_data():
     try:
+        print(f"Attempting to load validation data from: {VALIDATION_FILE}")
+        print(f"File exists: {os.path.exists(VALIDATION_FILE)}")
+        
+        if not os.path.exists(VALIDATION_FILE):
+            print(f"Creating empty validation data file")
+            with open(VALIDATION_FILE, 'w', encoding='utf-8') as f:
+                json.dump([], f, ensure_ascii=False, indent=2)
+            return []
+            
         with open(VALIDATION_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            print(f"Loaded data type: {type(data)}")  # 데이터 타입 출력
-            print(f"First item type: {type(data[0]) if data else 'empty'}")  # 첫 번째 아이템 타입 출력
-            return data
+            # 먼저 파일 내용 읽기
+            file_content = f.read()
+            
+            # 파일이 비어있는지 확인
+            if not file_content.strip():
+                print("File is empty, returning empty list")
+                return []
+                
+            # JSON 파싱 시도
+            try:
+                data = json.loads(file_content)
+                print(f"Successfully loaded data, type: {type(data)}")
+                print(f"First item type: {type(data[0]) if data else 'empty'}")
+                return data
+            except json.JSONDecodeError as json_err:
+                print(f"JSON decode error: {str(json_err)}")
+                print(f"First 100 chars of content: {file_content[:100]}")
+                raise
     except Exception as e:
         print(f"Error loading validation data: {str(e)}")
-        raise
+        # 비상 대책: 빈 배열 반환
+        print("Returning empty list as fallback")
+        return []
 
 def save_validation_data(data):
     try:
@@ -166,8 +191,15 @@ async def disconnect(request: DisconnectRequest):
 async def get_data():
     try:
         data = load_validation_data()
+        
+        # ID 필드가 없는 항목에 ID 추가
+        for idx, item in enumerate(data):
+            if 'id' not in item or not item['id']:
+                item['id'] = str(idx + 1)
+        
         return data
     except Exception as e:
+        print(f"Error in get_data: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to load data: {str(e)}")
 
 @app.post("/api/evaluate")

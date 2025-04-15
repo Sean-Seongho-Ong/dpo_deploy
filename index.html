@@ -186,16 +186,26 @@
 
         async function loadData() {
             try {
+                console.log('Fetching data from server...');
                 const response = await fetch(`${API_URL}/api/data`);
-                if (response.ok) {
-                    evaluationData = await response.json();
-                    renderItems();
-                } else {
-                    throw new Error('데이터 로드 실패');
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    console.error('Server response error:', errorData);
+                    throw new Error(`서버 응답 오류: ${errorData.detail || response.statusText}`);
                 }
+                
+                const data = await response.json();
+                console.log('Data loaded successfully:', data.length, 'items');
+                if (data.length === 0) {
+                    console.warn('Warning: Empty data array returned from server');
+                }
+                
+                evaluationData = data;
+                renderItems();
             } catch (error) {
                 console.error('Error loading data:', error);
-                alert('데이터를 로드하는 중 오류가 발생했습니다.');
+                alert(`데이터를 로드하는 중 오류가 발생했습니다: ${error.message}`);
             }
         }
 
