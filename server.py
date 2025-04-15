@@ -18,6 +18,10 @@ VALIDATION_FILE = os.path.join(os.path.dirname(__file__), 'qlora_finetune_datase
 OPTIMIZATION_FILE = os.path.join(os.path.dirname(__file__), 'direct_preference_optimization.json')
 ACCOUNT_FILE = os.path.join(os.path.dirname(__file__), 'account.json')
 
+# 서버 설정
+SERVER_IP = '134.185.98.95'
+SERVER_PORT = 8000
+
 PORT = int(os.environ.get('PORT', 5000))
 DEBUG = os.environ.get('FLASK_ENV') == 'development'
 
@@ -264,4 +268,4 @@ def reset_evaluation():
         return jsonify({'error': f'An unexpected error occurred: {str(e)}'}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=PORT, debug=DEBUG) 
+    app.run(host=SERVER_IP, port=SERVER_PORT, debug=False) 
