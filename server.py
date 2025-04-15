@@ -470,6 +470,11 @@ async def shutdown_event():
         except Exception as e:
             print(f"서버 종료 시 데이터 저장 중 오류 발생: {str(e)}")
 
+# 프로덕션 모드에서는 상세 로그 감소
+if APP_MODE == 'pro':
+    import logging
+    logging.basicConfig(level=logging.WARNING)
+
 if __name__ == '__main__':
     print(f"Starting server at http://{SERVER_IP}:{SERVER_PORT}")
     print(f"Documentation available at http://{SERVER_IP}:{SERVER_PORT}/docs")
