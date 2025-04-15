@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>문서 평가 시스템</title>
+    <meta name="app-mode" content="dev">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body {
@@ -117,19 +118,53 @@
                 <h2>평가 항목</h2>
                 <div>
                     <span id="user-info" class="badge bg-primary"></span>
+                    <button class="btn btn-success ms-2" onclick="saveData()">저장</button>
                     <button class="btn btn-secondary ms-2" onclick="logout()">로그아웃</button>
                 </div>
+            </div>
+            <div id="pagination-info" class="mb-2">
+                <span id="completion-status"></span>
+            </div>
+            <div id="pagination-controls" class="mb-3">
+                <button class="btn btn-sm btn-outline-primary" onclick="goToPage(1)">처음</button>
+                <button class="btn btn-sm btn-outline-primary" onclick="prevPage()">이전</button>
+                <span id="page-info" class="mx-2">페이지 1</span>
+                <button class="btn btn-sm btn-outline-primary" onclick="nextPage()">다음</button>
+                <button class="btn btn-sm btn-outline-primary" onclick="goToLastPage()">마지막</button>
+                <button class="btn btn-sm btn-primary ms-2" onclick="goToFirstUncompleted()">미완료 항목으로</button>
             </div>
             <div id="evaluation-items"></div>
         </div>
     </div>
 
     <script>
-        const API_URL = 'http://134.185.98.95:8000';
+        const APP_MODE = document.querySelector('meta[name="app-mode"]').getAttribute('content');
+        let API_URL;
+        
+        if (APP_MODE === 'dev') {
+            API_URL = 'http://localhost:8000';
+            console.log('개발 모드에서 실행 중: localhost:8000');
+        } else {
+            API_URL = 'http://134.185.98.95:8000';
+            console.log('프로덕션 모드에서 실행 중: 134.185.98.95:8000');
+        }
+        
         let currentUser = null;
         let evaluationData = [];
-        const completedItems = new Set();
-
+        let currentPage = 1;
+        const itemsPerPage = 10;
+        let totalPages = 1;
+        let hasUnsavedChanges = false;  // 저장되지 않은 변경사항 플래그
+        
+        // 브라우저 창이 닫히거나 페이지를 떠날 때 경고 표시
+        window.addEventListener('beforeunload', function(e) {
+            if (hasUnsavedChanges) {
+                const message = '저장되지 않은 변경사항이 있습니다. 정말로 페이지를 떠나시겠습니까?';
+                e.returnValue = message;
+                return message;
+            }
+        });
+        
         async function login() {
             const username = document.getElementById('username').value;
             const password = document.getElementById('password').value;
@@ -154,6 +189,7 @@
                     document.getElementById('evaluation-container').style.display = 'block';
                     document.getElementById('user-info').textContent = `사용자: ${username}`;
                     await loadData();
+                    startAutoSave();
                 } else {
                     const data = await response.json();
                     alert(data.detail || '로그인에 실패했습니다.');
@@ -165,6 +201,13 @@
         }
 
         async function logout() {
+            // 저장되지 않은 변경사항이 있으면 저장
+            if (hasUnsavedChanges) {
+                if (confirm('저장되지 않은 변경사항이 있습니다. 저장하시겠습니까?')) {
+                    await saveData();
+                }
+            }
+            
             try {
                 await fetch(`${API_URL}/api/disconnect`, {
                     method: 'POST',
@@ -173,6 +216,8 @@
                     },
                     body: JSON.stringify({ username: currentUser })
                 });
+                
+                stopAutoSave();
             } catch (error) {
                 console.error('Logout error:', error);
             }
@@ -196,30 +241,90 @@
                 }
                 
                 const data = await response.json();
-                console.log('Data loaded successfully:', data.length, 'items');
-                if (data.length === 0) {
-                    console.warn('Warning: Empty data array returned from server');
-                }
+                console.log('Raw data loaded:', data);
                 
-                evaluationData = data;
+                // 데이터 처리 및 검증
+                const processedData = data.map(item => {
+                    // ID를 숫자로 통일
+                    if (typeof item.id === 'string' && !isNaN(item.id)) {
+                        item.id = Number(item.id);
+                    }
+                    
+                    // 완료 상태 정확히 처리
+                    if (item.metadata?.evaluation) {
+                        if (item.metadata.evaluation.completed === 'true') {
+                            item.metadata.evaluation.completed = true;
+                        } else if (item.metadata.evaluation.completed === 'false') {
+                            item.metadata.evaluation.completed = false;
+                        }
+                    }
+                    
+                    return item;
+                });
+                
+                console.log('Processed data:', processedData);
+                
+                // 완료된 항목을 마지막으로 정렬
+                evaluationData = sortDataByCompletion(processedData);
+                totalPages = Math.ceil(evaluationData.length / itemsPerPage);
+                updatePaginationInfo();
                 renderItems();
+                
+                // 변경사항 초기화
+                hasUnsavedChanges = false;
+                updateSaveButtonStatus();
             } catch (error) {
                 console.error('Error loading data:', error);
                 alert(`데이터를 로드하는 중 오류가 발생했습니다: ${error.message}`);
             }
         }
 
+        function sortDataByCompletion(data) {
+            // 완료된 항목과 미완료 항목 분리
+            const completed = data.filter(item => item.metadata?.evaluation?.completed);
+            const uncompleted = data.filter(item => !item.metadata?.evaluation?.completed);
+            
+            // 미완료 항목을 먼저, 완료된 항목을 나중에 정렬
+            return [...uncompleted, ...completed];
+        }
+        
+        function updatePaginationInfo() {
+            // 페이지 정보 업데이트
+            document.getElementById('page-info').textContent = `페이지 ${currentPage}/${totalPages}`;
+            
+            // 완료 상태 정보 업데이트
+            const completedCount = evaluationData.filter(item => item.metadata?.evaluation?.completed).length;
+            const totalCount = evaluationData.length;
+            document.getElementById('completion-status').textContent = 
+                `전체 ${totalCount}개 중 ${completedCount}개 완료 (${Math.round(completedCount/totalCount*100)}%)`;
+        }
+
         function renderItems() {
             const container = document.getElementById('evaluation-items');
             container.innerHTML = '';
-
-            evaluationData.forEach((item, index) => {
-                const itemId = item.id || `item_${index}`;
-                const isCompleted = item.metadata?.evaluation?.completed || false;
+            
+            // 현재 페이지에 표시할 항목의 시작 인덱스와 끝 인덱스 계산
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const endIndex = Math.min(startIndex + itemsPerPage, evaluationData.length);
+            
+            // 디버깅을 위한 로그 추가
+            console.log('Rendering items:', startIndex, 'to', endIndex);
+            console.log('Current page data:', evaluationData.slice(startIndex, endIndex));
+            
+            // 현재 페이지의 항목만 렌더링
+            for (let i = startIndex; i < endIndex; i++) {
+                const item = evaluationData[i];
+                const itemId = String(item.id || `item_${i}`);
+                
+                // 명확하게 완료 상태 확인 및 로깅
+                const isCompleted = item.metadata?.evaluation?.completed === true;
+                console.log(`Item ${itemId} completed status:`, isCompleted, 'Raw value:', item.metadata?.evaluation?.completed);
+                
                 const currentScore = item.metadata?.evaluation?.score || null;
+                
                 const div = document.createElement('div');
                 div.className = `evaluation-item ${isCompleted ? 'completed' : ''}`;
-                div.dataset.id = item.id;
+                div.dataset.id = itemId;
                 div.innerHTML = `
                     <h3>문서 ID: ${itemId} 
                         ${isCompleted ? 
@@ -243,11 +348,14 @@
                         ${[1, 2, 3, 4, 5].map(score => `
                             <button class="rating-btn ${currentScore === score ? 'active' : ''}" 
                                     onclick="rateItem(this, ${score})" 
-                                    ${isCompleted ? 'disabled' : ''}>${score}</button>
+                                    ${isCompleted ? 'disabled="disabled"' : ''}>
+                                ${score}
+                            </button>
                         `).join('')}
                     </div>
                     ${isCompleted ? `<div class="mt-2"><strong>평가 점수: ${currentScore}</strong></div>` : ''}
-                    <button class="btn btn-secondary edit-btn" onclick="toggleEditForm('${itemId}')" ${isCompleted ? 'disabled' : ''}>수정</button>
+                    <button class="btn btn-secondary edit-btn" onclick="toggleEditForm('${itemId}')" 
+                            ${isCompleted ? 'disabled="disabled"' : ''}>수정</button>
                     <div id="edit-form-${itemId}" class="edit-form">
                         <div class="mb-3">
                             <label>Instruction</label>
@@ -265,68 +373,56 @@
                     </div>
                 `;
                 container.appendChild(div);
-            });
+            }
+            
+            updatePaginationInfo();
         }
 
         function rateItem(button, score) {
-            const itemId = button.closest('.evaluation-item').dataset.id;
-            const item = evaluationData.find(item => item.id === itemId);
+            const itemEl = button.closest('.evaluation-item');
+            const itemId = itemEl.dataset.id;
             
-            if (item?.metadata?.evaluation?.completed) {
+            // ID를 숫자로 변환하여 검색 (JSON 파일의 형식과 일치시킴)
+            let item;
+            if (!isNaN(itemId)) {
+                item = evaluationData.find(item => item.id === Number(itemId) || item.id === itemId);
+            } else {
+                item = evaluationData.find(item => item.id === itemId);
+            }
+            
+            console.log('Looking for item with ID:', itemId, 'Type:', typeof itemId);
+            console.log('Found item:', item);
+            
+            if (!item) {
+                alert('해당 항목을 찾을 수 없습니다.');
+                return;
+            }
+            
+            if (item.metadata?.evaluation?.completed) {
                 alert('이미 평가가 완료된 항목입니다. 재평가 버튼을 사용해주세요.');
                 return;
             }
             
-            console.log('Rating item:', itemId, 'with score:', score);
+            // 로컬에서만 UI 업데이트
+            if (!item.metadata) item.metadata = {};
+            item.metadata.evaluation = {
+                score: score,
+                username: currentUser,
+                completed: true,
+                timestamp: new Date().toISOString(),
+                modified: true // 변경 플래그 설정
+            };
             
-            // 즉시 UI 업데이트
-            if (item) {
-                if (!item.metadata) item.metadata = {};
-                item.metadata.evaluation = {
-                    score: score,
-                    username: currentUser,
-                    completed: true,
-                    timestamp: new Date().toISOString()
-                };
-                renderItems();
-            }
+            // 평가 후 데이터 재정렬 및 UI 업데이트
+            evaluationData = sortDataByCompletion(evaluationData);
+            renderItems();
             
-            // 평가 데이터 전송
-            fetch(`${API_URL}/api/evaluate`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    id: itemId,
-                    evaluation: score,
-                    username: currentUser
-                })
-            })
-            .then(response => {
-                if (!response.ok) {
-                    // 실패 시 UI 롤백
-                    if (item) {
-                        item.metadata.evaluation.completed = false;
-                        renderItems();
-                    }
-                    return response.json().then(data => {
-                        throw new Error(data.detail || '평가 저장에 실패했습니다');
-                    });
-                }
-                return response.json();
-            })
-            .then(data => {
-                console.log('평가 저장 성공:', data);
-                // 성공 시 데이터 다시 로드하여 최신 상태 반영
-                loadData().then(() => {
-                    alert('평가가 저장되었습니다.');
-                });
-            })
-            .catch(error => {
-                console.error('평가 저장 실패:', error);
-                alert(error.message);
-            });
+            // 변경사항 플래그 설정
+            hasUnsavedChanges = true;
+            updateSaveButtonStatus();
+            
+            // 변경 성공 알림
+            alert('평가가 임시 저장되었습니다. 최종 저장을 위해 저장 버튼을 클릭하세요.');
         }
 
         function toggleEditForm(itemId) {
@@ -339,32 +435,29 @@
             const input = document.getElementById(`edit-input-${itemId}`).value;
             const output = document.getElementById(`edit-output-${itemId}`).value;
             
-            try {
-                const response = await fetch(`${API_URL}/api/modify`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        id: itemId,
-                        instruction,
-                        input,
-                        output,
-                        username: currentUser
-                    })
-                });
+            // ID 처리
+            let item;
+            if (!isNaN(itemId)) {
+                item = evaluationData.find(item => item.id === Number(itemId) || item.id === itemId);
+            } else {
+                item = evaluationData.find(item => item.id === itemId);
+            }
+            
+            if (item) {
+                // 로컬에서 데이터 업데이트
+                item.instruction = instruction;
+                item.input = input;
+                item.output = output;
+                item.contentModified = true; // 콘텐츠 수정 플래그 설정
                 
-                if (response.ok) {
-                    alert('수정이 저장되었습니다.');
-                    toggleEditForm(itemId);
-                    await loadData();
-                } else {
-                    const data = await response.json();
-                    alert(data.detail || '수정 저장에 실패했습니다.');
-                }
-            } catch (error) {
-                console.error('Error submitting edit:', error);
-                alert('서버 연결에 실패했습니다.');
+                toggleEditForm(itemId);
+                renderItems();
+                
+                // 변경사항 플래그 설정
+                hasUnsavedChanges = true;
+                updateSaveButtonStatus();
+                
+                alert('수정이 임시 저장되었습니다. 최종 저장을 위해 저장 버튼을 클릭하세요.');
             }
         }
 
@@ -372,30 +465,264 @@
             if (!confirm('정말로 이 항목을 재평가하시겠습니까?')) {
                 return;
             }
+            
+            // ID 처리
+            let item;
+            if (!isNaN(itemId)) {
+                item = evaluationData.find(item => item.id === Number(itemId) || item.id === itemId);
+            } else {
+                item = evaluationData.find(item => item.id === itemId);
+            }
+            
+            if (item && item.metadata && item.metadata.evaluation) {
+                // 로컬에서 평가 상태 초기화
+                item.metadata.evaluation.completed = false;
+                item.metadata.evaluation.reset = true; // 재평가 플래그 설정
+                evaluationData = sortDataByCompletion(evaluationData);
+                renderItems();
+                
+                // 변경사항 플래그 설정
+                hasUnsavedChanges = true;
+                updateSaveButtonStatus();
+                
+                alert('재평가가 가능한 상태로 변경되었습니다. 최종 저장을 위해 저장 버튼을 클릭하세요.');
+            }
+        }
 
+        let saveInterval;
+        function startAutoSave() {
+            saveInterval = setInterval(async () => {
+                try {
+                    await fetch(`${API_URL}/api/save`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                    console.log('자동 저장 요청 완료');
+                } catch (error) {
+                    console.error('자동 저장 오류:', error);
+                }
+            }, 300000); // 5분마다 저장
+        }
+
+        function stopAutoSave() {
+            if (saveInterval) {
+                clearInterval(saveInterval);
+                saveInterval = null;
+            }
+        }
+
+        // 페이지 이동 함수들
+        function goToPage(page) {
+            if (page < 1 || page > totalPages) return;
+            currentPage = page;
+            renderItems();
+        }
+        
+        function prevPage() {
+            if (currentPage > 1) {
+                currentPage--;
+                renderItems();
+            }
+        }
+        
+        function nextPage() {
+            if (currentPage < totalPages) {
+                currentPage++;
+                renderItems();
+            }
+        }
+        
+        function goToLastPage() {
+            currentPage = totalPages;
+            renderItems();
+        }
+        
+        function goToFirstUncompleted() {
+            // 첫 번째 미완료 항목 찾기
+            const firstUncompletedIndex = evaluationData.findIndex(item => !item.metadata?.evaluation?.completed);
+            
+            if (firstUncompletedIndex !== -1) {
+                // 해당 항목이 있는 페이지로 이동
+                currentPage = Math.floor(firstUncompletedIndex / itemsPerPage) + 1;
+                renderItems();
+            } else {
+                alert('모든 항목이 완료되었습니다!');
+            }
+        }
+
+        // 저장 버튼 상태 업데이트
+        function updateSaveButtonStatus() {
+            const saveButton = document.querySelector('.btn-success') || document.querySelector('.btn-danger');
+            if (saveButton) {
+                saveButton.textContent = hasUnsavedChanges ? '저장 필요 *' : '저장';
+                saveButton.classList.toggle('btn-danger', hasUnsavedChanges);
+                saveButton.classList.toggle('btn-success', !hasUnsavedChanges);
+            }
+        }
+
+        async function saveData() {
             try {
-                const response = await fetch(`${API_URL}/api/reset-evaluation`, {
+                const saveButton = document.querySelector('.btn-success') || document.querySelector('.btn-danger');
+                saveButton.disabled = true;
+                saveButton.textContent = '저장 중...';
+                
+                console.log('변경사항 저장 시작...');
+                
+                // 변경된 항목 목록
+                const changedItems = [];
+                
+                // 평가 상태 변경 항목 전송
+                const evaluationPromises = evaluationData
+                    .filter(item => item.metadata?.evaluation?.completed && item.metadata?.evaluation?.modified)
+                    .map(item => {
+                        changedItems.push(item.id);
+                        console.log('평가 저장 요청:', item.id, item.metadata.evaluation.score);
+                        
+                        // 반드시 ID를 문자열로 변환하여 전송
+                        return fetch(`${API_URL}/api/evaluate`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                id: String(item.id),
+                                evaluation: item.metadata.evaluation.score,
+                                username: currentUser
+                            })
+                        })
+                        .then(response => {
+                            if (!response.ok) {
+                                return response.json().then(data => {
+                                    console.error('평가 저장 실패:', data);
+                                    throw new Error(data.detail || '평가 저장에 실패했습니다');
+                                });
+                            }
+                            return response.json();
+                        });
+                    });
+                
+                // 재평가 상태 변경 항목 전송
+                const resetPromises = evaluationData
+                    .filter(item => item.metadata?.evaluation?.reset)
+                    .map(item => {
+                        changedItems.push(item.id);
+                        console.log('재평가 요청:', item.id);
+                        
+                        return fetch(`${API_URL}/api/reset-evaluation`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                id: String(item.id),
+                                username: currentUser
+                            })
+                        })
+                        .then(response => {
+                            if (!response.ok) {
+                                return response.json().then(data => {
+                                    console.error('재평가 요청 실패:', data);
+                                    throw new Error(data.detail || '재평가 요청에 실패했습니다');
+                                });
+                            }
+                            return response.json();
+                        });
+                    });
+                
+                // 수정된 콘텐츠 항목 전송
+                const editPromises = evaluationData
+                    .filter(item => item.contentModified)
+                    .map(item => {
+                        changedItems.push(item.id);
+                        console.log('콘텐츠 수정 요청:', item.id);
+                        
+                        return fetch(`${API_URL}/api/modify`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                id: String(item.id),
+                                instruction: item.instruction,
+                                input: item.input,
+                                output: item.output,
+                                username: currentUser
+                            })
+                        })
+                        .then(response => {
+                            if (!response.ok) {
+                                return response.json().then(data => {
+                                    console.error('콘텐츠 수정 실패:', data);
+                                    throw new Error(data.detail || '콘텐츠 수정에 실패했습니다');
+                                });
+                            }
+                            return response.json();
+                        });
+                    });
+                
+                // 처리할 요청이 없는 경우
+                if (evaluationPromises.length === 0 && resetPromises.length === 0 && editPromises.length === 0) {
+                    alert('저장할 변경사항이 없습니다.');
+                    saveButton.disabled = false;
+                    saveButton.textContent = '저장';
+                    updateSaveButtonStatus();
+                    return;
+                }
+                
+                // 모든 요청 순차 처리
+                console.log('총 요청 수:', evaluationPromises.length + resetPromises.length + editPromises.length);
+                
+                // 순차 처리를 위해 Promise.all 대신 개별 처리
+                for (const promise of [...evaluationPromises, ...resetPromises, ...editPromises]) {
+                    await promise.catch(error => {
+                        console.error('요청 처리 중 오류:', error);
+                        throw error;
+                    });
+                }
+                
+                // 최종 저장 요청
+                console.log('최종 저장 요청 전송');
+                const response = await fetch(`${API_URL}/api/save`, {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json',
+                        'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({
-                        id: itemId,
-                        username: currentUser
-                    })
+                    body: JSON.stringify({ force: true })
                 });
-
+                
                 if (response.ok) {
-                    // 데이터 다시 로드
-                    await loadData();
-                    alert('재평가가 가능한 상태로 변경되었습니다.');
-                } else {
                     const data = await response.json();
-                    throw new Error(data.detail || '재평가 상태 변경에 실패했습니다');
+                    alert('모든 변경사항이 성공적으로 저장되었습니다.');
+                    console.log('저장 완료:', data);
+                    
+                    // 변경사항 플래그 초기화
+                    hasUnsavedChanges = false;
+                    
+                    // 현재 페이지 번호 저장
+                    const currentPageBackup = currentPage;
+                    
+                    // 최신 데이터 다시 로드
+                    await loadData();
+                    
+                    // 저장 전에 있던 페이지로 이동
+                    if (currentPageBackup <= totalPages) {
+                        currentPage = currentPageBackup;
+                        renderItems();
+                    }
+                } else {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || '저장에 실패했습니다.');
                 }
             } catch (error) {
-                console.error('재평가 상태 변경 실패:', error);
-                alert(error.message);
+                console.error('저장 오류:', error);
+                alert(`저장 중 오류가 발생했습니다: ${error.message}`);
+            } finally {
+                const saveButton = document.querySelector('.btn-success') || document.querySelector('.btn-danger');
+                saveButton.disabled = false;
+                saveButton.textContent = '저장';
+                updateSaveButtonStatus();
             }
         }
     </script>

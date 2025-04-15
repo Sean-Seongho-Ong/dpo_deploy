@@ -30,5 +30,13 @@
     "output": "According to 47 CFR §2.925, the FCC provides compliance requirements for import conditions for RF equipment. Specific provisions may apply based on device type and usage conditions. Refer to the rule text for complete guidance.",
     "username": "admin",
     "timestamp": "2025-04-14T22:52:55.468518"
+  },
+  {
+    "id": "9",
+    "instruction": "Please explain the FCC guidance on: import conditions for RF equipment?",
+    "input": "Topic: import conditions for RF equipment. Please refer to 47 CFR §25.129.",
+    "output": "According to 47 CFR §25.129, the FCC provides compliance requirements for import conditions for RF equipment. Specific provisions may apply based on device type and usage conditions. Refer to the rule text for complete guidance.",
+    "username": "admin",
+    "timestamp": "2025-04-15T20:23:41.086780"
   }
 ]
