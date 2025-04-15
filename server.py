@@ -1,12 +1,28 @@
-from flask import Flask, request, jsonify, send_from_directory
-from flask_cors import CORS
+from fastapi import FastAPI, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional, List, Dict, Any, Union
 import json
 from datetime import datetime
 import os
 from threading import Lock
+import uvicorn
 
-app = Flask(__name__, static_folder='.')
-CORS(app, resources={r"/*": {"origins": "*"}})
+app = FastAPI(title="문서 평가 시스템 API")
+
+# CORS 설정
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 정적 파일 제공
+app.mount("/static", StaticFiles(directory="."), name="static")
 
 # 동시 접속자 수 제한을 위한 락
 active_users_lock = Lock()
@@ -22,22 +38,36 @@ ACCOUNT_FILE = os.path.join(os.path.dirname(__file__), 'account.json')
 SERVER_IP = '134.185.98.95'
 SERVER_PORT = 8000
 
-PORT = int(os.environ.get('PORT', 5000))
-DEBUG = os.environ.get('FLASK_ENV') == 'development'
+# Pydantic 모델
+class LoginRequest(BaseModel):
+    username: str
+    password: str
 
-@app.route('/')
-def serve_index():
-    return send_from_directory('.', 'index.html')
+class DisconnectRequest(BaseModel):
+    username: str
 
-@app.route('/<path:path>')
-def serve_static(path):
-    return send_from_directory('.', path)
+class EvaluationRequest(BaseModel):
+    id: str
+    evaluation: int
+    username: str
 
+class ModificationRequest(BaseModel):
+    id: str
+    instruction: str
+    input: str
+    output: str
+    username: str
+
+class ResetEvaluationRequest(BaseModel):
+    id: str
+    username: str
+
+# 헬퍼 함수
 def load_accounts():
     with open(ACCOUNT_FILE, 'r', encoding='utf-8') as f:
         return json.load(f)
 
-def verify_credentials(username, password):
+def verify_credentials(username: str, password: str) -> bool:
     accounts = load_accounts()
     for user in accounts['users']:
         if user['username'] == username and user['password'] == password:
@@ -83,65 +113,76 @@ def save_optimization_data(data):
         print(f"Error saving optimization data: {str(e)}")
         raise
 
-@app.route('/api/connect', methods=['POST'])
-def connect():
+# 라우트 정의
+@app.get("/")
+async def serve_index():
+    return FileResponse("index.html")
+
+@app.get("/{path:path}")
+async def serve_static(path: str):
+    if os.path.isfile(path):
+        return FileResponse(path)
+    raise HTTPException(status_code=404, detail="File not found")
+
+@app.post("/api/connect")
+async def connect(request: LoginRequest):
     try:
-        username = request.json.get('username')
-        password = request.json.get('password')
+        username = request.username
+        password = request.password
         
         print(f"Login attempt for user: {username}")  # 로깅 추가
         
         if not username or not password:
             print("Missing credentials")
-            return jsonify({'error': 'Username and password are required'}), 400
+            raise HTTPException(status_code=400, detail="Username and password are required")
         
         if not verify_credentials(username, password):
             print("Invalid credentials")
-            return jsonify({'error': 'Invalid credentials'}), 401
+            raise HTTPException(status_code=401, detail="Invalid credentials")
         
         with active_users_lock:
             if len(active_users) >= MAX_USERS:
                 print("Max users reached")
-                return jsonify({'error': 'Maximum number of users reached'}), 403
+                raise HTTPException(status_code=403, detail="Maximum number of users reached")
             active_users.add(username)
         
         print(f"User {username} connected successfully")
-        return jsonify({'message': 'Connected successfully'})
+        return {"message": "Connected successfully"}
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
         print(f"Error in connect: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.route('/api/disconnect', methods=['POST'])
-def disconnect():
-    username = request.json.get('username')
+@app.post("/api/disconnect")
+async def disconnect(request: DisconnectRequest):
+    username = request.username
     if username:
         with active_users_lock:
             active_users.discard(username)
-    return jsonify({'message': 'Disconnected successfully'})
+    return {"message": "Disconnected successfully"}
 
-@app.route('/api/data', methods=['GET'])
-def get_data():
-    data = load_validation_data()
-    return jsonify(data)
+@app.get("/api/data")
+async def get_data():
+    try:
+        data = load_validation_data()
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load data: {str(e)}")
 
-@app.route('/api/evaluate', methods=['POST'])
-def evaluate():
+@app.post("/api/evaluate")
+async def evaluate(request: EvaluationRequest):
     try:
         print("=== Debug: Starting Evaluation ===")
-        data = request.json
-        print(f"Raw request data: {data}")
         
-        if not data:
-            return jsonify({'error': 'No data received'}), 400
-            
-        item_id = data.get('id')
-        evaluation = data.get('evaluation')
-        username = data.get('username')
+        item_id = request.id
+        evaluation = request.evaluation
+        username = request.username
         
         print(f"Parsed values - id: {item_id}, evaluation: {evaluation}, username: {username}")
         
         if not all([item_id, evaluation, username]):
-            return jsonify({'error': 'Missing required fields'}), 400
+            raise HTTPException(status_code=400, detail="Missing required fields")
         
         try:
             with open(VALIDATION_FILE, 'r', encoding='utf-8') as f:
@@ -150,7 +191,7 @@ def evaluate():
                 print(f"First item: {validation_data[0] if validation_data else 'Empty'}")
         except Exception as e:
             print(f"Error reading file: {str(e)}")
-            return jsonify({'error': 'Failed to read validation data'}), 500
+            raise HTTPException(status_code=500, detail="Failed to read validation data")
         
         item = None
         for data_item in validation_data:
@@ -160,7 +201,7 @@ def evaluate():
                 
         if not item:
             print(f"Item not found for id: {item_id}")
-            return jsonify({'error': 'Item not found'}), 404
+            raise HTTPException(status_code=404, detail="Item not found")
             
         print(f"Found item: {item}")
         
@@ -185,27 +226,28 @@ def evaluate():
             with open(VALIDATION_FILE, 'w', encoding='utf-8') as f:
                 json.dump(validation_data, f, ensure_ascii=False, indent=2)
             print("Save successful")
-            return jsonify({'message': 'Evaluation saved successfully'})
+            return {"message": "Evaluation saved successfully"}
         except Exception as e:
             print(f"Error saving file: {str(e)}")
-            return jsonify({'error': 'Failed to save evaluation'}), 500
+            raise HTTPException(status_code=500, detail="Failed to save evaluation")
             
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
         print(f"Unexpected error: {str(e)}")
-        return jsonify({'error': f'An unexpected error occurred: {str(e)}'}), 500
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
 
-@app.route('/api/modify', methods=['POST'])
-def modify():
+@app.post("/api/modify")
+async def modify(request: ModificationRequest):
     try:
-        data = request.json
-        item_id = data.get('id')
-        instruction = data.get('instruction')
-        input_text = data.get('input')
-        output = data.get('output')
-        username = data.get('username')
+        item_id = request.id
+        instruction = request.instruction
+        input_text = request.input
+        output = request.output
+        username = request.username
         
         if not all([item_id, instruction, input_text, output, username]):
-            return jsonify({'error': 'Missing required fields'}), 400
+            raise HTTPException(status_code=400, detail="Missing required fields")
         
         optimization_data = {
             'id': item_id,
@@ -217,27 +259,28 @@ def modify():
         }
         
         save_optimization_data(optimization_data)
-        return jsonify({'message': 'Modification saved successfully'})
+        return {"message": "Modification saved successfully"}
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
         print(f"Error in modify: {str(e)}")
-        return jsonify({'error': f'Failed to save modification: {str(e)}'}), 500
+        raise HTTPException(status_code=500, detail=f"Failed to save modification: {str(e)}")
 
-@app.route('/api/reset-evaluation', methods=['POST'])
-def reset_evaluation():
+@app.post("/api/reset-evaluation")
+async def reset_evaluation(request: ResetEvaluationRequest):
     try:
-        data = request.json
-        item_id = data.get('id')
-        username = data.get('username')
+        item_id = request.id
+        username = request.username
         
         if not all([item_id, username]):
-            return jsonify({'error': 'Missing required fields'}), 400
+            raise HTTPException(status_code=400, detail="Missing required fields")
         
         try:
             with open(VALIDATION_FILE, 'r', encoding='utf-8') as f:
                 validation_data = json.load(f)
         except Exception as e:
             print(f"Error reading file: {str(e)}")
-            return jsonify({'error': 'Failed to read validation data'}), 500
+            raise HTTPException(status_code=500, detail="Failed to read validation data")
         
         item = None
         for data_item in validation_data:
@@ -246,7 +289,7 @@ def reset_evaluation():
                 break
                 
         if not item:
-            return jsonify({'error': 'Item not found'}), 404
+            raise HTTPException(status_code=404, detail="Item not found")
             
         if 'metadata' not in item:
             item['metadata'] = {}
@@ -258,14 +301,16 @@ def reset_evaluation():
         try:
             with open(VALIDATION_FILE, 'w', encoding='utf-8') as f:
                 json.dump(validation_data, f, ensure_ascii=False, indent=2)
-            return jsonify({'message': 'Evaluation reset successfully'})
+            return {"message": "Evaluation reset successfully"}
         except Exception as e:
             print(f"Error saving file: {str(e)}")
-            return jsonify({'error': 'Failed to save evaluation'}), 500
+            raise HTTPException(status_code=500, detail="Failed to save evaluation")
             
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
         print(f"Unexpected error: {str(e)}")
-        return jsonify({'error': f'An unexpected error occurred: {str(e)}'}), 500
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=SERVER_PORT, debug=False) 
+    uvicorn.run("server:app", host="0.0.0.0", port=SERVER_PORT, reload=False) 

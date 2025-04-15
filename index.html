@@ -156,7 +156,7 @@
                     await loadData();
                 } else {
                     const data = await response.json();
-                    alert(data.error || '로그인에 실패했습니다.');
+                    alert(data.detail || '로그인에 실패했습니다.');
                 }
             } catch (error) {
                 console.error('Login error:', error);
@@ -301,7 +301,7 @@
                         renderItems();
                     }
                     return response.json().then(data => {
-                        throw new Error(data.error || '평가 저장에 실패했습니다');
+                        throw new Error(data.detail || '평가 저장에 실패했습니다');
                     });
                 }
                 return response.json();
@@ -350,7 +350,7 @@
                     await loadData();
                 } else {
                     const data = await response.json();
-                    alert(data.error || '수정 저장에 실패했습니다.');
+                    alert(data.detail || '수정 저장에 실패했습니다.');
                 }
             } catch (error) {
                 console.error('Error submitting edit:', error);
@@ -381,7 +381,7 @@
                     alert('재평가가 가능한 상태로 변경되었습니다.');
                 } else {
                     const data = await response.json();
-                    throw new Error(data.error || '재평가 상태 변경에 실패했습니다');
+                    throw new Error(data.detail || '재평가 상태 변경에 실패했습니다');
                 }
             } catch (error) {
                 console.error('재평가 상태 변경 실패:', error);
